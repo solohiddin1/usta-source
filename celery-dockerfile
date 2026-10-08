@@ -1,0 +1,8 @@
+FROM python:3.12-alpine
+LABEL authors="Ravshan"
+MAINTAINER "Ravshan"
+WORKDIR /app
+ADD requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+ADD . .
+CMD ["celery", "-A", "config", "worker", "-l", "INFO"]

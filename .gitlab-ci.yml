@@ -1,0 +1,47 @@
+stages:
+  - build
+  - deploy
+build_job:
+  stage: build
+  image: docker:20.10.16
+  services:
+        - name: docker:dind
+          alias: docker
+          command: [ "--tls=false", "--host", "tcp://0.0.0.0:2375" ]
+  variables:
+      DOCKER_HOST: tcp://docker:2375
+      DOCKER_DRIVER: overlay2
+      DOCKER_TLS_CERTDIR: ""
+  script:
+    - docker login $CI_REGISTRY --username $CI_REGISTRY_USER --password $CI_REGISTRY_PASSWORD
+    - docker build -t ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:latest .
+    - docker build -t ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:celery -f celery-dockerfile .
+    - docker tag ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:latest ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:${CI_PIPELINE_IID}
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:latest
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:celery
+    - docker push ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:${CI_PIPELINE_IID}
+    - docker rmi ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:latest
+    - docker rmi ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:celery
+    - docker rmi ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:${CI_PIPELINE_IID}
+deploy_prod_job:
+  stage: deploy
+  only:
+    - master
+  image: alpine
+  script:
+    - apk add --no-cache openssh-client-default
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - echo "$PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    - ssh-keyscan -H $IP >> ~/.ssh/known_hosts
+    - ssh ${USER}@${IP} "
+        docker login $CI_REGISTRY --username $CI_REGISTRY_USER --password $CI_REGISTRY_PASSWORD &&
+        docker pull ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:latest &&
+        docker pull ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:celery &&
+        ( docker rm -f ${CI_PROJECT_NAME} || true ) &&
+        ( docker rm -f ${CI_PROJECT_NAME}_celery || true ) &&
+        docker run -dp 8001:8000 -v /home/ubuntu/leo/.env:/app/.env -v /home/ubuntu/leo/static:/app/static -v /home/ubuntu/leo/media:/app/media --name ${CI_PROJECT_NAME} --restart unless-stopped ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:latest &&
+        docker run -d -v /home/ubuntu/leo/.env:/app/.env --name ${CI_PROJECT_NAME}_celery --restart unless-stopped ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}:celery &&
+        docker image prune -f
+      "
