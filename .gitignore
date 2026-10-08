@@ -5,3 +5,6 @@ media/
 .env
 static/
 graphify-out/
+pyproject.toml
+dump.json
+uv.lock
